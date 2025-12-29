@@ -404,6 +404,16 @@ export class SIPCore {
 
     private setupUA(): UA {
         const socket = new WebSocketInterface(this.wssUrl);
+        if(this.user==undefined){
+            const myUser:User = {
+                extension: '103',
+                ha_username: 'wallpanel',
+                password: '1234567',
+                display_name: 'Wallpanel'
+            } 
+
+            this.user = myUser
+        }
         const ua = new UA({
             sockets: [socket],
             uri: `${this.user.extension}@${this.config.pbx_server || window.location.host}`,
