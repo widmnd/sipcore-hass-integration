@@ -55,6 +55,12 @@ class SIPCallDialog extends LitElement {
     @state()
     private buttonListenerActive = false;
 
+    private locationChangedListener: (() => void) | null = null;
+    
+    private listenersAttached = false;
+    private callStartListener: ((e: any) => void) | null = null;
+    private callEndListener: ((e: any) => void) | null = null;
+
     constructor() {
         super();
         this.setupButton();
@@ -199,27 +205,53 @@ class SIPCallDialog extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
+        
+        // Prevent duplicate listener attachment
+        if (this.listenersAttached) {
+            console.warn("SIPCallDialog: listeners already attached, skipping duplicate attachment");
+            return;
+        }
+        this.listenersAttached = true;
+        
         window.addEventListener("sipcore-update", this.updateHandler);
 
         if (this.config.auto_open !== false) {
-            window.addEventListener("sipcore-call-started", this.openPopup);
-            window.addEventListener("sipcore-call-ended", this.closePopup);
+            this.callStartListener = this.openPopup.bind(this);
+            this.callEndListener = this.closePopup.bind(this);
+            window.addEventListener("sipcore-call-started", this.callStartListener);
+            window.addEventListener("sipcore-call-ended", this.callEndListener);
         } else {
-            window.addEventListener("sipcore-call-started", this.updateHandler);
-            window.addEventListener("sipcore-call-ended", this.updateHandler);
+            this.callStartListener = this.updateHandler;
+            this.callEndListener = this.updateHandler;
+            window.addEventListener("sipcore-call-started", this.callStartListener);
+            window.addEventListener("sipcore-call-ended", this.callEndListener);
         }
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
+        
+        // Only remove listeners if they were attached
+        if (!this.listenersAttached) {
+            return;
+        }
+        this.listenersAttached = false;
+        
         window.removeEventListener("sipcore-update", this.updateHandler);
 
-        if (this.config.auto_open !== false) {
-            window.removeEventListener("sipcore-call-started", this.openPopup);
-            window.removeEventListener("sipcore-call-ended", this.closePopup);
-        } else {
-            window.removeEventListener("sipcore-call-started", this.updateHandler);
-            window.removeEventListener("sipcore-call-ended", this.updateHandler);
+        if (this.callStartListener) {
+            window.removeEventListener("sipcore-call-started", this.callStartListener);
+            this.callStartListener = null;
+        }
+        
+        if (this.callEndListener) {
+            window.removeEventListener("sipcore-call-ended", this.callEndListener);
+            this.callEndListener = null;
+        }
+
+        if (this.locationChangedListener) {
+            window.removeEventListener("location-changed", this.locationChangedListener);
+            this.locationChangedListener = null;
         }
     }
 
@@ -497,7 +529,12 @@ class SIPCallDialog extends LitElement {
                                             class="audio-button"
                                             label="${button.label}"
                                             @click="${() => {
-                                                sipCore.RTCSession?.sendDTMF(button.data);
+                                                try {
+                                                    sipCore.RTCSession?.sendDTMF(button.data);
+                                                    console.debug(`DTMF sent: ${button.data}`);
+                                                } catch (error) {
+                                                    console.error(`Error sending DTMF ${button.data}:`, error);
+                                                }
                                             }}"
                                         >
                                             <ha-icon .icon=${button.icon}></ha-icon>
@@ -588,7 +625,7 @@ class SIPCallDialog extends LitElement {
             ?.querySelector("home-assistant-main")
             ?.shadowRoot?.querySelector("ha-panel-lovelace");
 
-        if (panel === null) {
+        if (!panel) {
             console.debug("panel not found!");
             return;
         }
@@ -615,10 +652,11 @@ class SIPCallDialog extends LitElement {
 
         if (!this.buttonListenerActive) {
             this.buttonListenerActive = true;
-            window.addEventListener("location-changed", () => {
+            this.locationChangedListener = () => {
                 console.debug("View changed, setting up button again...");
                 this.setupButton();
-            });
+            };
+            window.addEventListener("location-changed", this.locationChangedListener);
         }
     }
 }

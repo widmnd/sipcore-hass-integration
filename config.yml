@@ -1,0 +1,34 @@
+auto_answer: false
+backup_user:
+  extension: "103"
+  ha_username: wallpanel
+  password: "1234567"
+custom_wss_url: wss://phone.home.srgio.es:8089/ws
+incomingRingtoneUrl: /sip_core_files/ring-tone.mp3
+outgoingRingtoneUrl: /sip_core_files/ringback-tone.mp3
+pbx_server: 10.69.2.4
+popup_config:
+  auto_open: true
+  buttons:
+    - data:
+        domain: dahua
+        door_id: "1"
+        entity_id: camera.vto_main_2
+        service: vto_open_door
+      icon: mdi:door-open
+      label: Open Door
+      type: service_call
+  extensions:
+    "8001":
+      camera_entity: camera.vto_main_2
+      name: VTO
+  hide_header_button: false
+  large: true
+sip_video: false
+users:
+  - extension: "102"
+    ha_username: sergio
+    password: "1234567"
+  - extension: "103"
+    ha_username: wallpanel
+    password: "1234567"

@@ -6,6 +6,7 @@ class AudioVisualizer {
     private visualValueCount;
     private visualMainElement;
     private visualElements: NodeListOf<HTMLElement> | undefined;
+    private mediaStreamSource: MediaStreamAudioSourceNode | null = null;
 
     constructor(renderRoot: HTMLElement | ShadowRoot, stream: MediaStream, visualValueCount = 16) {
         this.shouldStop = false;
@@ -20,6 +21,14 @@ class AudioVisualizer {
 
     stop() {
         this.shouldStop = true;
+        // Clean up audio context and disconnect media source
+        if (this.mediaStreamSource) {
+            this.mediaStreamSource.disconnect();
+            this.mediaStreamSource = null;
+        }
+        if (this.audioContext.state !== "closed") {
+            this.audioContext.close();
+        }
     }
 
     initDOM() {
@@ -56,16 +65,22 @@ class AudioVisualizer {
         };
         let i;
         for (i = 0; i < this.visualValueCount; ++i) {
-            const value = data[dataMap[i]] / 255; // + 0.025;
-            const elmStyles = this.visualElements![i].style;
+            const mappedIndex = dataMap[i];
+            // Add bounds checking to prevent accessing undefined indices
+            if (mappedIndex === undefined || mappedIndex >= data.length || !this.visualElements || i >= this.visualElements.length) {
+                console.warn(`Audio visualizer: invalid index mapping or element at position ${i}`);
+                continue;
+            }
+            const value = Math.max(0, Math.min(1, data[mappedIndex] / 255)); // Clamp value between 0 and 1
+            const elmStyles = this.visualElements[i].style;
             elmStyles.transform = `scaleY(${value})`;
             elmStyles.opacity = Math.max(0.25, value).toString();
         }
     }
 
     connectStream(stream: MediaStream) {
-        const source = this.audioContext.createMediaStreamSource(stream);
-        source.connect(this.analyser);
+        this.mediaStreamSource = this.audioContext.createMediaStreamSource(stream);
+        this.mediaStreamSource.connect(this.analyser);
         this.analyser.smoothingTimeConstant = 0.5;
         this.analyser.fftSize = 32;
 

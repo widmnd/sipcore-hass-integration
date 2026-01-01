@@ -31,6 +31,7 @@ sip_config = {
     ],
     "sip_video": False,
     "auto_answer": False,
+    "heartbeatIntervalMs": 30000,
     "popup_config": {
         "auto_open": True,
         "large": False,
