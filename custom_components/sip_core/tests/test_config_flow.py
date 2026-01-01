@@ -62,7 +62,7 @@ class TestConfigFlowValidation:
         valid_extensions = ["1001", "2000", "ext-123", "user_1"]
         invalid_extensions = ["", "invalid@ext", "ext#123", "123-invalid-"]
 
-        extension_regex = r"^[a-zA-Z0-9_-]{1,20}$"
+        extension_regex = r"^[a-zA-Z0-9]([a-zA-Z0-9_-]*[a-zA-Z0-9])?$"
         import re
 
         pattern = re.compile(extension_regex)
