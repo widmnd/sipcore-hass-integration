@@ -10,6 +10,8 @@ permissions: {}
 
 jobs:
   validate-hacs:
+    # Only run on original repo, not on forks
+    if: github.repository == 'TECH7Fox/sipcore-hass-integration'
     runs-on: ubuntu-latest
     steps:
       - name: HACS validation
