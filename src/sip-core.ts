@@ -66,6 +66,11 @@ export interface SIPCoreConfig {
      * "wss://sip.example.com/ws"
      */
     custom_wss_url: string;
+    /**
+     * Heartbeat interval in milliseconds to keep the connection alive
+     * @default 30000 (30 seconds)
+     */
+    heartbeatIntervalMs?: number;
 }
 
 /**
@@ -98,6 +103,8 @@ export class SIPCore {
     private wssUrl!: string;
     private iceCandidateTimeout: number | null = null;
 
+    private locationChangedListener: ((e: any) => Promise<void>) | null = null;
+
     public remoteAudioStream: MediaStream | null = null;
     public remoteVideoStream: MediaStream | null = null;
 
@@ -112,7 +119,7 @@ export class SIPCore {
         }
         this.hass = (homeAssistant as any).hass;
 
-        // Bind event handlers
+        // Bind event handlers to preserve 'this' context
         this.handleRemoteTrackEvent = this.handleRemoteTrackEvent.bind(this);
         this.handleIceGatheringStateChangeEvent = this.handleIceGatheringStateChangeEvent.bind(this);
     }
@@ -128,7 +135,7 @@ export class SIPCore {
     }
 
     get registered(): boolean {
-        return this.ua.isRegistered();
+        return this.ua?.isRegistered() ?? false;
     }
 
     private async fetchWSSUrl(): Promise<string> {
@@ -148,7 +155,7 @@ export class SIPCore {
             });
             if (resp.ok) {
                 const data = await resp.json();
-                const wssProtocol = window.location.protocol == "https:" ? "wss" : "ws";
+                const wssProtocol = window.location.protocol === "https:" ? "wss" : "ws";
                 console.debug("Ingress entry fetched:", data.ingress_entry);
                 return `${wssProtocol}://${window.location.host}${data.ingress_entry}/ws`;
             } else {
@@ -156,7 +163,7 @@ export class SIPCore {
             }
         } catch (error) {
             console.error("Error fetching ingress entry:", error);
-            throw new Error("No ingress entry or custom WSS URL provided");
+            throw new Error("Failed to retrieve WebSocket URL: No ingress entry or custom WSS URL provided");
         }
     }
 
@@ -180,10 +187,14 @@ export class SIPCore {
         if (this.AudioOutputId !== null) {
             console.debug(`Using audio output device: ${this.AudioOutputId}`);
             let audioElement = document.getElementById("remoteAudio") as any;
-            try {
-                await audioElement.setSinkId(this.AudioOutputId);
-            } catch (err) {
-                console.error(`Error setting audio output: ${err}`);
+            if (audioElement) {
+                try {
+                    await audioElement.setSinkId(this.AudioOutputId);
+                } catch (err) {
+                    console.error(`Error setting audio output: ${err}`);
+                }
+            } else {
+                console.warn("Remote audio element not found. Audio output device may not be set.");
             }
         }
 
@@ -283,69 +294,185 @@ export class SIPCore {
     }
 
     async init() {
-        this.config = await this.fetchConfig(this.hass);
-        window.addEventListener("location-changed", async () => {
-            console.debug("View changed, refresh config...");
-            let new_config = await this.fetchConfig(this.hass);
-            if (JSON.stringify(new_config) !== JSON.stringify(this.config)) {
-                console.info("Configuration changed, reloading SIP Core...");
-                this.ua.stop();
-                this.config = new_config;
-                await this.setupUser();
-                this.wssUrl = await this.fetchWSSUrl();
-                console.debug(`Connecting to ${this.wssUrl}...`);
-                this.ua.start();
-                this.triggerUpdate();
+        try {
+            this.config = await this.fetchConfig(this.hass);
+            
+            // Validate backup_user configuration
+            try {
+                this.validateUser(this.config.backup_user, "backup_user in configuration");
+            } catch (validationError) {
+                console.error(validationError);
+                throw validationError;
             }
-        });
-        this.wssUrl = await this.fetchWSSUrl();
-        await this.createHassioSession();
-        await this.setupAudio();
-        await this.setupUser();
+            
+            this.locationChangedListener = async () => {
+                console.debug("View changed, refresh config...");
+                try {
+                    let new_config = await this.fetchConfig(this.hass);
+                    if (JSON.stringify(new_config) !== JSON.stringify(this.config)) {
+                        console.info("Configuration changed, reloading SIP Core...");
+                        // Terminate any active calls before stopping UA
+                        if (this.RTCSession) {
+                            console.debug("Terminating active call before config reload...");
+                            this.RTCSession.terminate();
+                            this.RTCSession = null;
+                        }
+                        this.ua.stop();
+                        this.config = new_config;
+                        await this.setupUser();
+                        this.wssUrl = await this.fetchWSSUrl();
+                        console.debug(`Connecting to ${this.wssUrl}...`);
+                        this.ua.start();
+                        this.triggerUpdate();
+                    }
+                } catch (error) {
+                    console.error("Error during config reload:", error);
+                    // Attempt to reconnect if config reload fails
+                    try {
+                        this.ua.start();
+                    } catch (reconnectError) {
+                        console.error("Failed to reconnect after config reload error:", reconnectError);
+                    }
+                }
+            };
+            window.addEventListener("location-changed", this.locationChangedListener);
+            
+            this.wssUrl = await this.fetchWSSUrl();
+            await this.createHassioSession();
+            await this.setupAudio();
+            await this.setupUser();
 
-        console.debug(`Connecting to ${this.wssUrl}...`);
-        this.ua.start();
-        if (this.config.popup_config !== null) {
-            this.setupPopup();
+            console.debug(`Connecting to ${this.wssUrl}...`);
+            this.ua.start();
+            if (this.config.popup_config !== null) {
+                this.setupPopup();
+            }
+            this.triggerUpdate();
+
+            // autocall if set
+            const autocall_extension = new URLSearchParams(window.location.search).get("call");
+            if (autocall_extension) {
+                console.info(`Autocalling ${autocall_extension}...`);
+                try {
+                    await this.startCall(autocall_extension);
+                } catch (autocallError) {
+                    console.error("Error autocalling:", autocallError);
+                }
+            }
+        } catch (error) {
+            console.error("Error initializing SIP Core:", error);
+            throw error;
         }
-        this.triggerUpdate();
+    }
 
-        // autocall if set
-        const autocall_extension = new URLSearchParams(window.location.search).get("call");
-        if (autocall_extension) {
-            console.info(`Autocalling ${autocall_extension}...`);
-            this.startCall(autocall_extension);
+    /** Clean up resources and event listeners. Call before destroying the instance. */
+    destroy() {
+        if (this.locationChangedListener) {
+            window.removeEventListener("location-changed", this.locationChangedListener);
+            this.locationChangedListener = null;
+        }
+        if (this.heartBeatHandle) {
+            clearInterval(this.heartBeatHandle);
+            this.heartBeatHandle = null;
+        }
+        if (this.callTimerHandle) {
+            clearInterval(this.callTimerHandle);
+            this.callTimerHandle = null;
+        }
+        if (this.iceCandidateTimeout) {
+            clearTimeout(this.iceCandidateTimeout);
+            this.iceCandidateTimeout = null;
+        }
+        if (this.ua) {
+            this.ua.stop();
         }
     }
 
     private async setupUser(): Promise<void> {
         try {
-            const persons = await this.hass.callWS({ type: "person/list" });
-            const currentUsername = persons.storage.find((person: any) => person.user_id === this.hass.user.id).id;
-            this.user = this.config.users.find((user) => user.ha_username === currentUsername) || this.config.backup_user;
+            console.debug("setupUser(): start");
+            const personsResult = await this.hass.callWS({ type: "person/list" });
+
+            console.debug("Raw personsResult:", personsResult);
+
+            // Normalize possible shapes returned by different HA versions / containers
+            let persons: any[] = [];
+            if (personsResult && Array.isArray((personsResult as any).storage)) {
+                persons = (personsResult as any).storage;
+            } else if (personsResult && Array.isArray((personsResult as any).data)) {
+                persons = (personsResult as any).data;
+            } else if (Array.isArray(personsResult)) {
+                persons = personsResult;
+            }
+
+            // Filter out any non-object or falsy entries to avoid runtime errors
+            persons = (persons || []).filter((p) => p && typeof p === "object");
+
+            console.debug(`setupUser(): normalized persons count=${persons.length}`);
+
+            try {
+                const hassUserId = this.hass?.user?.id;
+                const matchedPerson = persons.find((person: any) => person && person.user_id === hassUserId);
+
+                // Prefer person.id, fallback to hass user name/id
+                let currentUsername: string | undefined;
+                if (matchedPerson && typeof matchedPerson.id === "string") {
+                    currentUsername = matchedPerson.id;
+                } else {
+                    currentUsername = this.hass?.user?.name || this.hass?.user?.username || this.hass?.user?.id;
+                }
+
+                // If person id is like 'person.john', strip prefix to match common `ha_username` values
+                if (typeof currentUsername === "string" && currentUsername.startsWith("person.")) {
+                    currentUsername = currentUsername.replace(/^person\./, "");
+                }
+
+                // Defensive: ensure config.users is an array
+                const users = Array.isArray(this.config?.users) ? this.config.users : [];
+
+                this.user = users.find((user) => user.ha_username === currentUsername) || this.getBackupUser();
+            } catch (innerError) {
+                console.error("Error processing personsResult:", innerError, { persons, hassUser: this.hass?.user });
+                this.user = this.getBackupUser();
+            }
+
+            
         } catch (error) {
             console.error("Error fetching persons from Home Assistant:", error);
-            this.user = this.config.backup_user;
+            this.user = this.getBackupUser();
         }
-        console.debug(`Selected user: ${this.user.ha_username} (${this.user.extension})`);
+        
+        // Validate the selected user
+        try {
+            this.validateUser(this.user, "selected user");
+        } catch (validationError) {
+            console.error(validationError);
+            throw validationError;
+        }
+        
+        console.debug(`Selected user: ${this.user?.ha_username} (${this.user?.extension})`);
         this.ua = this.setupUA();
     }
 
     private async fetchConfig(hass: any): Promise<SIPCoreConfig> {
         const token = hass.auth.data.access_token;
-        const resp = await fetch("/api/sip-core/config?t=" + Date.now(), {
-            method: "GET",
-            headers: {
-                Authorization: `Bearer ${token}`,
-            },
-        });
-        if (resp.ok) {
-            const config: SIPCoreConfig = await resp.json();
-            console.debug("SIP-Core Config fetched:", config);
-            return config;
-        } else {
-            console.error("No SIP-Core config found at /config/www/sip-config.json!");
-            throw new Error(`Failed to fetch sip-config.json: ${resp.statusText}`);
+        try {
+            const resp = await fetch("/api/sip-core/config?t=" + Date.now(), {
+                method: "GET",
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+            });
+            if (resp.ok) {
+                const config: SIPCoreConfig = await resp.json();
+                console.debug("SIP-Core Config fetched:", config);
+                return config;
+            } else {
+                throw new Error(`Failed to fetch SIP Core config: ${resp.statusText}`);
+            }
+        } catch (error) {
+            console.error("Error fetching SIP Core configuration:", error);
+            throw error;
         }
     }
 
@@ -367,7 +494,7 @@ export class SIPCore {
     playOutgoingTone(): void {
         if (this.outgoingAudio) {
             this.outgoingAudio.play().catch((error) => {
-                console.error("Incoming ringtone failed:", error);
+                console.error("Outgoing tone failed:", error);
             });
         }
     }
@@ -394,7 +521,32 @@ export class SIPCore {
     }
 
     async startCall(extension: string) {
-        this.ua.call(extension, await this.callOptions());
+        // Validate extension format
+        if (!extension || typeof extension !== "string") {
+            throw new Error("Invalid extension: extension must be a non-empty string");
+        }
+
+        // Extension should be alphanumeric and may contain some special chars like + or - for SIP URIs
+        // Allow basic SIP URI format or just the extension number
+        const isValidExtension = /^[a-zA-Z0-9+*#\-._~%!$&'()*+,;=:@/?]+$/.test(extension);
+        if (!isValidExtension) {
+            throw new Error(`Invalid extension format: "${extension}" contains invalid characters`);
+        }
+
+        // Check if it looks like a complete SIP URI or just an extension
+        // If it doesn't contain @, assume it's just an extension number and log it
+        if (!extension.includes("@")) {
+            console.debug(`Calling extension: ${extension}`);
+        } else {
+            console.debug(`Calling SIP URI: ${extension}`);
+        }
+
+        try {
+            this.ua.call(extension, await this.callOptions());
+        } catch (error) {
+            console.error(`Error initiating call to ${extension}:`, error);
+            throw error;
+        }
     }
 
     /** Dispatches a `sipcore-update` event */
@@ -404,16 +556,6 @@ export class SIPCore {
 
     private setupUA(): UA {
         const socket = new WebSocketInterface(this.wssUrl);
-        if(this.user==undefined){
-            const myUser:User = {
-                extension: '103',
-                ha_username: 'wallpanel',
-                password: '1234567',
-                display_name: 'Wallpanel'
-            } 
-
-            this.user = myUser
-        }
         const ua = new UA({
             sockets: [socket],
             uri: `${this.user.extension}@${this.config.pbx_server || window.location.host}`,
@@ -433,7 +575,7 @@ export class SIPCore {
             this.heartBeatHandle = setInterval(() => {
                 console.debug("Sending heartbeat");
                 socket.send("\n\n");
-            }, this.heartBeatIntervalMs);
+            }, this.config.heartbeatIntervalMs ?? this.heartBeatIntervalMs);
         });
         ua.on("unregistered", (e) => {
             console.warn("Unregistered");
@@ -447,6 +589,7 @@ export class SIPCore {
             this.triggerUpdate();
             if (this.heartBeatHandle != null) {
                 clearInterval(this.heartBeatHandle);
+                this.heartBeatHandle = null;
             }
 
             if (e.cause === "Connection Error") {
@@ -570,13 +713,20 @@ export class SIPCore {
         }
 
         let remoteAudio = document.getElementById("remoteAudio") as HTMLAudioElement;
-        if (e.track.kind === "audio" && remoteAudio.srcObject != stream) {
-            this.remoteAudioStream = stream;
-            remoteAudio.srcObject = stream;
-            try {
-                await remoteAudio.play();
-            } catch (err) {
-                console.error("Error starting audio playback: " + err);
+        if (!remoteAudio) {
+            console.warn("Remote audio element not found. Cannot attach remote audio stream.");
+            return;
+        }
+
+        if (e.track.kind === "audio") {
+            if (remoteAudio.srcObject !== stream) {
+                this.remoteAudioStream = stream;
+                remoteAudio.srcObject = stream;
+                try {
+                    await remoteAudio.play();
+                } catch (err) {
+                    console.error("Error starting audio playback: " + err);
+                }
             }
         }
 
@@ -624,21 +774,64 @@ export class SIPCore {
         this.setIngressCookie(session);
     }
 
+    /** Extract and normalize backup_user, handling both object and array forms */
+    private getBackupUser(): User {
+        let backupUser = this.config.backup_user as any;
+        if (Array.isArray(backupUser)) {
+            backupUser = backupUser[0];
+        }
+        this.validateUser(backupUser, "backup_user");
+        return backupUser;
+    }
+
+    /** Validate that a User object has all required fields */
+    private validateUser(user: any, userLabel: string): void {
+        if (!user) {
+            throw new Error(`Invalid ${userLabel}: user is null or undefined`);
+        }
+        const requiredFields = ["ha_username", "extension", "password"];
+        for (const field of requiredFields) {
+            if (typeof user[field] !== "string" || !user[field]) {
+                throw new Error(`Invalid ${userLabel}: missing or invalid required field '${field}'`);
+            }
+        }
+        // display_name is optional, but if provided, should be a string
+        if (user.display_name && typeof user.display_name !== "string") {
+            throw new Error(`Invalid ${userLabel}: 'display_name' must be a string`);
+        }
+    }
+
     /** Returns a list of audio devices of the specified kind */
     async getAudioDevices(audioKind: AUDIO_DEVICE_KIND) {
         console.debug(`Fetching audio devices of kind: ${audioKind}`);
         
         // Check if mediaDevices API is available
-        if (!navigator.mediaDevices?.getUserMedia) {
+        if (!navigator.mediaDevices?.enumerateDevices) {
             throw new Error("MediaDevices API is not available. Ensure HTTPS is enabled and the browser supports this feature.");
         }
         
-        // first get permission to use audio devices
-        let stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach((track) => track.stop());
-
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        return devices.filter((device) => device.kind == audioKind);
+        try {
+            // Try to enumerate devices - permissions may already be granted
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const filteredDevices = devices.filter((device) => device.kind === audioKind);
+            
+            // If we got devices with labels, no need to request permission
+            if (filteredDevices.some((device) => device.label)) {
+                return filteredDevices;
+            }
+            
+            // If devices have no labels, we need to request permission
+            console.debug("No device labels found, requesting microphone permission...");
+            let stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream.getTracks().forEach((track) => track.stop());
+            
+            // Enumerate again after permission granted - now we should have labels
+            const updatedDevices = await navigator.mediaDevices.enumerateDevices();
+            return updatedDevices.filter((device) => device.kind === audioKind);
+        } catch (err) {
+            console.error("Error fetching audio devices:", err);
+            throw err;
+        }
     }
 }
 
