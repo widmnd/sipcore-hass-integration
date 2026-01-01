@@ -60,7 +60,7 @@ describe('SIPCore Validation', () => {
 
   describe('null safety checks', () => {
     it('should safely access optional properties', () => {
-      const user = { user: 'test' };
+      const user: any = { user: 'test' };
 
       // Test optional chaining and nullish coalesce
       const password = user['password'] ?? 'default';
