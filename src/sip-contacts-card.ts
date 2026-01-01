@@ -1,4 +1,5 @@
 import { LitElement, html, css } from "lit";
+import { customElement, property, state } from "lit/decorators.js";
 import { sipCore } from "./sip-core";
 
 declare global {
@@ -24,9 +25,12 @@ interface SIPContactsCardConfig {
     state_color: boolean;
 }
 
+@customElement("sip-contacts-card")
 class SIPContactsCard extends LitElement {
     public hass: any;
     public config: SIPContactsCardConfig | undefined;
+
+    private updateHandler = () => this.requestUpdate();
 
     static get styles() {
         return css`
@@ -94,12 +98,12 @@ class SIPContactsCard extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
-        window.addEventListener("sipcore-update", () => this.requestUpdate());
+        window.addEventListener("sipcore-update", this.updateHandler);
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
-        window.removeEventListener("sipcore-update", () => this.requestUpdate());
+        window.removeEventListener("sipcore-update", this.updateHandler);
     }
 
     render() {

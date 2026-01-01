@@ -50,8 +50,16 @@ class SIPCallCard extends LitElement {
     private audioVisualizer: AudioVisualizer | undefined;
 
     setConfig(config: any) {
+        if (!config) {
+            throw new Error("Invalid card configuration: config is required");
+        }
+        if (!config.extensions || typeof config.extensions !== "object") {
+            throw new Error("Invalid card configuration: 'extensions' must be an object");
+        }
+        if (!Array.isArray(config.buttons)) {
+            throw new Error("Invalid card configuration: 'buttons' must be an array");
+        }
         this.config = config;
-        // TODO: Check if config is valid
     }
 
     static getStubConfig() {
@@ -189,6 +197,12 @@ class SIPCallCard extends LitElement {
     disconnectedCallback() {
         super.disconnectedCallback();
         window.removeEventListener("sipcore-update", this.updateHandler);
+        
+        // Clean up audio visualizer if it exists
+        if (this.audioVisualizer) {
+            this.audioVisualizer.stop();
+            this.audioVisualizer = undefined;
+        }
     }
 
     render() {
