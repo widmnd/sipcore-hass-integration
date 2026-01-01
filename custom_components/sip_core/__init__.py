@@ -7,7 +7,7 @@ from homeassistant.components.hassio.const import DOMAIN as HASSIO_DOMAIN
 from homeassistant.components.hassio.handler import HassIO, get_supervisor_client
 from homeassistant.helpers.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
-from .const import ASTERISK_ADDON_SLUG, DOMAIN, JS_FILENAME, JS_URL_PATH
+from .const import ASTERISK_ADDON_SLUG, DOMAIN, JS_FILENAME, JS_URL_PATH, HASS_DATA_KEY_CONFIG, HASS_DATA_KEY_OPTIONS, HASS_DATA_KEY_ENTRY_ID, HASS_DATA_KEY_SIP_CONFIG, HASS_DATA_KEY_CONFIG, HASS_DATA_KEY_OPTIONS, HASS_DATA_KEY_ENTRY_ID, HASS_DATA_KEY_SIP_CONFIG
 from .resources import add_resources, remove_resources
 from .defaults import sip_config
 
@@ -23,9 +23,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     logger.info("Setting up SIP Core component")
     hass.data.setdefault(DOMAIN, {
-        "data": config_entry.data,
-        "options": {"sip_config": config_entry.options.get("sip_config", sip_config)},
-        "entry_id": config_entry.entry_id,
+        HASS_DATA_KEY_CONFIG: config_entry.data,
+        HASS_DATA_KEY_OPTIONS: {HASS_DATA_KEY_SIP_CONFIG: config_entry.options.get(HASS_DATA_KEY_SIP_CONFIG, sip_config)},
+        HASS_DATA_KEY_ENTRY_ID: config_entry.entry_id,
     })
     logger.info(config_entry.data)
     logger.info(config_entry.options)
@@ -69,7 +69,8 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
 async def update_listener(hass: HomeAssistant, config_entry: ConfigEntry):
     """Handle options update."""
     logger.info("SIP Core configuration updated")
-    hass.data[DOMAIN]["options"]["sip_config"] = config_entry.options.get("sip_config")
+    if DOMAIN in hass.data:
+        hass.data[DOMAIN][HASS_DATA_KEY_OPTIONS][HASS_DATA_KEY_SIP_CONFIG] = config_entry.options.get(HASS_DATA_KEY_SIP_CONFIG)
 
 
 class SipCoreConfigView(HomeAssistantView):
@@ -83,10 +84,16 @@ class SipCoreConfigView(HomeAssistantView):
         """Handle GET request."""
         hass: HomeAssistant = request.app["hass"]
         try:
-            sip_config = hass.data[DOMAIN]["options"]["sip_config"]
+            if DOMAIN not in hass.data:
+                return self.json({"error": "SIP Core not configured"}, status_code=503)
+            sip_config = hass.data[DOMAIN][HASS_DATA_KEY_OPTIONS][HASS_DATA_KEY_SIP_CONFIG]
             return self.json(sip_config)
-        except KeyError:
+        except KeyError as err:
+            logger.error(f"Error accessing SIP config: {err}")
             return self.json({"error": "No configuration found"}, status_code=500)
+        except Exception as err:
+            logger.error(f"Unexpected error in config view: {err}")
+            return self.json({"error": "Internal server error"}, status_code=500)
 
 
 class AsteriskIngressView(HomeAssistantView):
