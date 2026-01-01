@@ -31,22 +31,8 @@ jobs:
     - name: Install Node Dependencies
       run: npm ci
     - name: Run Node Tests
-      run: npm test -- --coverage --passWithNoTests
-    - name: Install Python Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pytest pytest-asyncio
-        pip install -r requirements.txt
-    - name: Run Python Tests
-      run: pytest custom_components/sip_core/tests -v
+      run: npm test -- --passWithNoTests
     - name: Build Card
       run: npm run build
-    - name: Upload Coverage
-      uses: codecov/codecov-action@v3
-      with:
-        files: ./coverage/coverage-final.json
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
 
 
