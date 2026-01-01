@@ -6,6 +6,8 @@ on:
 
 jobs:
   release:
+    # Only run on original repo, not on forks
+    if: github.repository == 'TECH7Fox/sipcore-hass-integration'
     name: Prepare release
     permissions:
       contents: write
