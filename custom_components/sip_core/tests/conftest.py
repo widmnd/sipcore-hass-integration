@@ -3,14 +3,20 @@
 This configuration prevents pytest from importing the parent package,
 which contains Home Assistant imports that may cause circular import errors.
 """
-from pathlib import Path
+import sys
+from types import ModuleType
 
+# Block parent package imports by creating stub modules in sys.modules
+# This must happen BEFORE pytest tries to import anything from the parent package
+_parent_modules = [
+    'custom_components.sip_core',
+    'sip_core',
+]
 
-def pytest_ignore_collect(collection_path, config):
-    """Ignore parent package files during collection."""
-    # Prevent collection of parent package __init__.py
-    if collection_path.name == "__init__.py":
-        parent = collection_path.parent
-        if parent.name == "sip_core" and parent.parent.name == "custom_components":
-            return True
-    return False
+for module_name in _parent_modules:
+    if module_name not in sys.modules:
+        # Create a dummy module to prevent actual import
+        stub = ModuleType(module_name)
+        stub.__path__ = []  # Make it a package
+        stub.__file__ = __file__
+        sys.modules[module_name] = stub
