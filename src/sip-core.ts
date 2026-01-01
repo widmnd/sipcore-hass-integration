@@ -627,6 +627,12 @@ export class SIPCore {
     /** Returns a list of audio devices of the specified kind */
     async getAudioDevices(audioKind: AUDIO_DEVICE_KIND) {
         console.debug(`Fetching audio devices of kind: ${audioKind}`);
+        
+        // Check if mediaDevices API is available
+        if (!navigator.mediaDevices?.getUserMedia) {
+            throw new Error("MediaDevices API is not available. Ensure HTTPS is enabled and the browser supports this feature.");
+        }
+        
         // first get permission to use audio devices
         let stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         stream.getTracks().forEach((track) => track.stop());
